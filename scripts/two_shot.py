@@ -1,3 +1,4 @@
+import re
 import base64
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -78,6 +79,28 @@ class RectFilter(Filter):
         x2 = int(division_width * self.position.ex)
 
         x[:, y1:y2, x1:x2] = self.weight
+
+        return x
+
+class MultipleRectFilter(Filter):
+    def __init__(self, divisions, positions, weight):
+        self.divisions_and_posisions = zip(divisions, positions)
+        self.positions = positions
+        self.weight = weight
+
+    def create_tensor(self, num_channels: int, height_b: int, width_b: int) -> torch.Tensor:
+
+        x = torch.zeros(num_channels, height_b, width_b).to(devices.device)
+
+        for division, position in self.divisions_and_posisions:
+            division_height = height_b / division.y
+            division_width = width_b / division.x
+            y1 = int(division_height * position.y)
+            y2 = int(division_height * position.ey)
+            x1 = int(division_width * position.x)
+            x2 = int(division_width * position.ex)
+
+            x[:, y1:y2, x1:x2] = self.weight
 
         return x
 
@@ -170,11 +193,20 @@ class Script(scripts.Script):
         return scripts.AlwaysVisible
 
     def create_rect_filters_from_ui_params(self, raw_divisions: str, raw_positions: str, raw_weights: str):
+        div_re = r'(?:\s*,\s*)?((?:\d+:\d+)|(?:\((?:\d+:\d+(?:\s*,\s*)?)+\)))'
+        pos_re = r'(?:\s*,\s*)?((?:\d+(?:-\d+)?:\d+(?:-\d+)?)|(?:\((?:\d+(?:-\d+)?:\d+(?:-\d+)?(?:\s*,\s*)?)+\)))'
 
-        divisions = []
-        for division in raw_divisions.split(','):
-            y, x = division.split(':')
-            divisions.append(Division(float(y), float(x)))
+        division_groups = []
+        for division_group_raw in re.findall(div_re, raw_divisions):
+            if division_group_raw[0] == '(' and division_group_raw[-1] == ')':
+                group = [
+                    divisions.strip().split(':')
+                    for divisions in division_group_raw[1:-1].split(',')
+                ]
+            else:
+                group = [division_group_raw.split(':')]
+            group = [Division(float(division[0]), float(division[1])) for division in group]
+            division_groups.append(group)
 
         def start_and_end_position(raw: str):
             nums = [float(num) for num in raw.split('-')]
@@ -183,12 +215,21 @@ class Script(scripts.Script):
             else:
                 return nums[0], nums[1]
 
-        positions = []
-        for position in raw_positions.split(','):
-            y, x = position.split(':')
-            y1, y2 = start_and_end_position(y)
-            x1, x2 = start_and_end_position(x)
-            positions.append(Position(y1, x1, y2, x2))
+        position_groups = []
+        for position_group_raw in re.findall(pos_re, raw_positions):
+            if position_group_raw[0] == '(' and position_group_raw[-1] == ')':
+                group = [
+                    positions.strip().split(':')
+                    for positions in position_group_raw[1:-1].split(',')
+                ]
+            else:
+                group = [position_group_raw.split(':')]
+            for i, position in enumerate(group):
+                y, x = position
+                y1, y2 = start_and_end_position(y)
+                x1, x2 = start_and_end_position(x)
+                group[i] = Position(y1, x1, y2, x2)
+            position_groups.append(group)
 
         weights = []
         for w in raw_weights.split(','):
@@ -196,7 +237,10 @@ class Script(scripts.Script):
 
         # todo: assert len
 
-        return [RectFilter(division, position, weight) for division, position, weight in zip(divisions, positions, weights)]
+        return [
+            MultipleRectFilter(divisions, positions, weight)
+            for divisions, positions, weight in zip(division_groups, position_groups, weights)
+        ]
 
     def create_mask_filters_from_ui_params(self, raw_divisions: str, raw_positions: str, raw_weights: str):
 
