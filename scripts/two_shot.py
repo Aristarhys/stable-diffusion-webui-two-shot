@@ -84,15 +84,14 @@ class RectFilter(Filter):
 
 class MultipleRectFilter(Filter):
     def __init__(self, divisions, positions, weight):
-        self.divisions_and_posisions = zip(divisions, positions)
-        self.positions = positions
+        self.divisions_and_positions = list(zip(divisions, positions))
         self.weight = weight
 
     def create_tensor(self, num_channels: int, height_b: int, width_b: int) -> torch.Tensor:
 
         x = torch.zeros(num_channels, height_b, width_b).to(devices.device)
 
-        for division, position in self.divisions_and_posisions:
+        for division, position in self.divisions_and_positions:
             division_height = height_b / division.y
             division_width = width_b / division.x
             y1 = int(division_height * position.y)
@@ -607,12 +606,7 @@ class Script(scripts.Script):
 
         self.num_batches = p.batch_size
 
-        if self.selected_twoshot_tab == 0:
-            pass
-        elif self.selected_twoshot_tab == 1:
-            self.filters = self.create_rect_filters_from_ui_params(raw_divisions, raw_positions, raw_weights)
-        else:
-            raise ValueError(f"Unknown filter mode")
+        self.filters = self.create_rect_filters_from_ui_params(raw_divisions, raw_positions, raw_weights)
 
         self.end_at_step = raw_end_at_step
 
