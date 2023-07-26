@@ -499,6 +499,8 @@ class Script(scripts.Script):
         process_script_params.append(end_at_step)
         process_script_params.append(alpha_blend)
         process_script_params.extend(cur_weight_sliders)
+        process_script_params.append(mask_denoise_checkbox)
+        process_script_params.append(canvas_image)
         return process_script_params
 
     def denoised_callback(self, params: CFGDenoisedParams):
