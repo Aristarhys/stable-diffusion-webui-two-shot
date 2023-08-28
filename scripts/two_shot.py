@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 
 from scripts.sketch_helper import get_high_freq_colors, color_quantization, create_binary_matrix_base64, create_binary_mask
 import numpy as np
@@ -103,6 +104,23 @@ class MultipleRectFilter(Filter):
 
         return x
 
+class PoseFilter(Filter):
+    def __init__(self, pose, radius, weight):
+        self.pose = pose
+        self.radius = radius
+        self.weight = weight
+
+    def create_tensor(self, num_channels: int, height_b: int, width_b: int) -> torch.Tensor:
+        x = torch.zeros(num_channels, height_b, width_b).to(devices.device)
+
+        mask_tensor = torch.from_numpy(self.pose).to(devices.device).float() * self.weight
+        mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)
+        _, target_height, target_width = x.shape
+        mask_tensor = F.interpolate(mask_tensor, size=(target_height, target_width), mode='nearest')
+        #mask_tensor = F.avg_pool2d(mask_tensor, kernel_size=8, stride=8)
+
+        return x + mask_tensor.squeeze(0).expand_as(x)
+
 
 class MaskFilter:
     def __init__(self, binary_mask: np.array = None, weight: float = None, float_mask: np.array = None):
@@ -191,9 +209,9 @@ class Script(scripts.Script):
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
-    def create_rect_filters_from_ui_params(self, raw_divisions: str, raw_positions: str, raw_weights: str):
-        div_re = r'(?:\s*,\s*)?((?:\d+:\d+)|(?:\((?:\d+:\d+(?:\s*,\s*)?)+\)))'
-        pos_re = r'(?:\s*,\s*)?((?:\d+(?:-\d+)?:\d+(?:-\d+)?)|(?:\((?:\d+(?:-\d+)?:\d+(?:-\d+)?(?:\s*,\s*)?)+\)))'
+    def create_filters_from_ui_params(self, raw_divisions: str, raw_positions: str, raw_weights: str, pose_masks: list):
+        div_re = r'(?:\s*,\s*)?((?:\d+:\d+)|(?:\((?:\d+:\d+(?:\s*,\s*)?)+\))|(?:@\d+))'
+        pos_re = r'(?:\s*,\s*)?((?:\d+(?:-\d+)?:\d+(?:-\d+)?)|(?:\((?:\d+(?:-\d+)?:\d+(?:-\d+)?(?:\s*,\s*)?)+\))|(?:_))'
 
         division_groups = []
         for division_group_raw in re.findall(div_re, raw_divisions):
@@ -202,6 +220,10 @@ class Script(scripts.Script):
                     divisions.strip().split(':')
                     for divisions in division_group_raw[1:-1].split(',')
                 ]
+            elif division_group_raw[0] == '@':
+                group = int(division_group_raw[1:])
+                division_groups.append(group)
+                continue
             else:
                 group = [division_group_raw.split(':')]
             group = [Division(float(division[0]), float(division[1])) for division in group]
@@ -221,6 +243,10 @@ class Script(scripts.Script):
                     positions.strip().split(':')
                     for positions in position_group_raw[1:-1].split(',')
                 ]
+            elif position_group_raw[0] == '_':
+                group = position_group_raw[1:]
+                position_groups.append(group)
+                continue
             else:
                 group = [position_group_raw.split(':')]
             for i, position in enumerate(group):
@@ -234,10 +260,8 @@ class Script(scripts.Script):
         for w in raw_weights.split(','):
             weights.append(float(w))
 
-        # todo: assert len
-
         return [
-            MultipleRectFilter(divisions, positions, weight)
+            MultipleRectFilter(divisions, positions, weight) if isinstance(divisions, list) else PoseFilter(pose_masks[divisions], positions, weight)
             for divisions, positions, weight in zip(division_groups, position_groups, weights)
         ]
 
@@ -597,7 +621,7 @@ class Script(scripts.Script):
 
     def process(self, p: StableDiffusionProcessing, *args, **kwargs):
 
-        enabled, raw_divisions, raw_positions, raw_weights, raw_end_at_step, alpha_blend, *cur_weight_sliders = args
+        enabled, raw_divisions, raw_positions, raw_weights, raw_end_at_step, pose_masks, *_ = args
 
         self.enabled = enabled
 
@@ -606,7 +630,7 @@ class Script(scripts.Script):
 
         self.num_batches = p.batch_size
 
-        self.filters = self.create_rect_filters_from_ui_params(raw_divisions, raw_positions, raw_weights)
+        self.filters = self.create_filters_from_ui_params(raw_divisions, raw_positions, raw_weights, pose_masks)
 
         self.end_at_step = raw_end_at_step
 
